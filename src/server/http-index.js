@@ -1,17 +1,74 @@
 #!/usr/bin/env node
 
 /**
- * HANA MCP Server - HTTP transport. POST /mcp for JSON-RPC; GET for server info.
- * Set MCP_HTTP_PORT, MCP_HTTP_HOST (default 127.0.0.1:3100).
+ * HANA MCP Server — HTTP transport with LDA per-request auth support.
+ *
+ * Forked from hana-mcp-server v0.3.1 src/server/http-index.js.
+ *
+ * ── LDA Custom ──
+ * Adds support for X-HANA-User / X-HANA-Password headers that create
+ * ephemeral HANA connections per-request instead of using the env-var pool.
+ *
+ * Preserve this file when upgrading hana-mcp-server.
  */
 
 const http = require('http');
+const { AsyncLocalStorage } = require('async_hooks');
 const { logger } = require('../utils/logger');
 const MCPHandler = require('./mcp-handler');
 const { ERROR_CODES } = require('../constants/mcp-constants');
 const { validateBearer } = require('./http-auth');
 const { redactSecrets } = require('../utils/sensitive-redact');
 const { isOriginAllowed } = require('./http-origin');
+const { connectionManager } = require('../database/connection-manager');
+const { createHanaClient } = require('../database/hana-client');
+
+// ── LDA Custom ────────────────────────────────────────────────────
+// Per-request HANA credentials context (REQ-HPAU-04, REQ-HPAU-05)
+// Uses AsyncLocalStorage so concurrent requests don't race.
+const hanaCredsStorage = new AsyncLocalStorage();
+
+// Monkey-patch connectionManager.withConnection to support ephemeral
+// per-request connections when per-user credentials are in context.
+// The config-like object passed to createHanaClient is compatible with
+// its internal buildLegacyConnectionParams() fallback path.
+const originalWithConnection = connectionManager.withConnection.bind(connectionManager);
+connectionManager.withConnection = async function wrappedWithConnection(fn) {
+  const perUserCreds = hanaCredsStorage.getStore();
+  if (perUserCreds) {
+    const conn = await createHanaClient({
+      host:     process.env.HANA_HOST,
+      port:     process.env.HANA_PORT || '443',
+      user:     perUserCreds.user,
+      password: perUserCreds.password,
+      encrypt:  process.env.HANA_ENCRYPT !== 'false',
+      validateCert: process.env.HANA_VALIDATE_CERT !== 'false',
+      databaseName: process.env.HANA_DATABASE_NAME,
+      ssl:      process.env.HANA_SSL !== 'false',
+    });
+    try {
+      return await fn(conn);
+    } finally {
+      try { await conn.disconnect(); } catch (_) { /* ignore close errors */ }
+    }
+  }
+  return originalWithConnection(fn);
+};
+
+function getPerUserCreds(req) {
+  const user     = req.headers['x-hana-user'];
+  const password = req.headers['x-hana-password'];
+
+  if (!user && !password) return null;
+  if (!user || !password) {
+    const err = new Error('Both X-HANA-User and X-HANA-Password are required');
+    err.statusCode = 400;
+    err.jsonRpcError = { code: -32602, message: 'Both X-HANA-User and X-HANA-Password are required' };
+    throw err;
+  }
+  return { user, password };
+}
+// ── End LDA Custom ────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.MCP_HTTP_PORT, 10) || 3100;
 const HOST = process.env.MCP_HTTP_HOST || '127.0.0.1';
@@ -72,6 +129,23 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── LDA Custom ──
+  // Check for per-request HANA credentials BEFORE JWT auth (they are
+  // orthogonal — JWT protects the MCP endpoint, per-user creds are for HANA).
+  let perUserCreds = null;
+  try {
+    perUserCreds = getPerUserCreds(req);
+  } catch (err) {
+    const status = err.statusCode || 400;
+    const body = err.jsonRpcError
+      ? { jsonrpc: '2.0', error: err.jsonRpcError, id: null }
+      : { jsonrpc: '2.0', error: { code: -32602, message: err.message }, id: null };
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+    return;
+  }
+  // ── End LDA Custom ──
+
   if (process.env.MCP_HTTP_AUTH_ENABLED === 'true') {
     try {
       await validateBearer(req);
@@ -111,18 +185,30 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  try {
-    const response = await MCPHandler.handleRequest(request);
-    if (response) {
-      sendResponse(res, 200, response);
-    } else {
-      res.writeHead(202);
-      res.end();
+  // ── LDA Custom ──
+  // Wrap request processing in AsyncLocalStorage context so the
+  // monkey-patched connectionManager.withConnection picks up per-user creds.
+  const processRequest = async () => {
+    try {
+      const response = await MCPHandler.handleRequest(request);
+      if (response) {
+        sendResponse(res, 200, response);
+      } else {
+        res.writeHead(202);
+        res.end();
+      }
+    } catch (err) {
+      logger.error(`HTTP MCP error: ${redactSecrets(err.message)}`);
+      sendJsonRpcError(res, request.id, ERROR_CODES.INTERNAL_ERROR, redactSecrets(err.message));
     }
-  } catch (err) {
-    logger.error(`HTTP MCP error: ${redactSecrets(err.message)}`);
-    sendJsonRpcError(res, request.id, ERROR_CODES.INTERNAL_ERROR, redactSecrets(err.message));
+  };
+
+  if (perUserCreds) {
+    hanaCredsStorage.run(perUserCreds, processRequest);
+  } else {
+    await processRequest();
   }
+  // ── End LDA Custom ──
 });
 
 server.listen(PORT, HOST, () => {
