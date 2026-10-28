@@ -145,7 +145,12 @@ async function runTests() {
     assert(listSchemasTool?.outputSchema?.type === 'object', 'hana_list_schemas outputSchema');
     assert(list.result.tools.some((t) => t.name === 'hana_explain_table'), 'hana_explain_table present');
     assert(list.result.tools.some((t) => t.name === 'hana_query_next_page'), 'hana_query_next_page present');
-    ok('Tools list returns tools with annotations, title, outputSchema on query/list tools, new explain/next_page tools');
+    const openOrdersTool = list.result.tools.find((t) => t.name === 'hana_open_orders');
+    assert(openOrdersTool?.annotations?.readOnlyHint === true, 'hana_open_orders readOnlyHint');
+    assert(openOrdersTool?.annotations?.destructiveHint === false, 'hana_open_orders destructiveHint');
+    assert(Object.keys(openOrdersTool.inputSchema.properties || {}).length === 0, 'hana_open_orders has no inputs');
+    assert(openOrdersTool.inputSchema.additionalProperties === false, 'hana_open_orders rejects extra inputs');
+    ok('Tools list returns standard query tools and fixed read-only hana_open_orders');
   } catch (e) {
     fail('Tools list', e);
   }

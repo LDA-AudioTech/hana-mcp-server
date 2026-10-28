@@ -312,6 +312,25 @@ const TOOLS = [
     }
   },
   {
+    name: 'hana_open_orders',
+    title: 'Read open sales orders',
+    description:
+      'Read-only, fixed query for non-cancelled open sales orders in SBO_LDA_ES. Returns order number, customer, earliest open-line delivery date, pending quantity, and whether any quantity has been delivered. No SQL or filters are accepted; results are capped at 50 rows per page and use hana_query_next_page when truncated.',
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    },
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false
+    },
+    outputSchema: QUERY_RESULT_OUTPUT_SCHEMA
+  },
+  {
     name: 'hana_execute_query',
     title: 'Execute SQL query',
     description:
@@ -748,7 +767,7 @@ const TOOL_CATEGORIES = {
   SCHEMA: ['hana_list_schemas'],
   TABLE: ['hana_list_tables', 'hana_describe_table', 'hana_explain_table'],
   INDEX: ['hana_list_indexes', 'hana_describe_index'],
-  QUERY: ['hana_execute_query', 'hana_query_next_page'],
+  QUERY: ['hana_open_orders', 'hana_execute_query', 'hana_query_next_page'],
   DISCOVERY: [
     'hana_list_constraints', 'hana_get_table_stats', 'hana_list_views', 'hana_describe_view',
     'hana_list_synonyms', 'hana_list_procedures', 'hana_describe_procedure',

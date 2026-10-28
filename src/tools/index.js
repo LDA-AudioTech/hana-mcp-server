@@ -23,6 +23,7 @@ const TOOL_IMPLEMENTATIONS = {
   hana_explain_table: TableTools.explainTable,
   hana_list_indexes: IndexTools.listIndexes,
   hana_describe_index: IndexTools.describeIndex,
+  hana_open_orders: QueryTools.getOpenOrders,
   hana_execute_query: QueryTools.executeQuery,
   hana_query_next_page: QueryTools.queryNextPage,
   // Discovery tools (Tier 2 — 0.3.0)
@@ -172,4 +173,4 @@ class ToolRegistry {
   }
 }
 
-module.exports = ToolRegistry; 
+module.exports = ToolRegistry;

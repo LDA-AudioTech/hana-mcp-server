@@ -1,5 +1,5 @@
 /**
- * Audit logger for hana_execute_query calls.
+ * Audit logger for query tool calls, including fixed read-only capabilities.
  * Appends one JSON line per call to HANA_AUDIT_LOG_FILE when HANA_AUDIT_ENABLED=true.
  * Failures here never propagate to callers.
  */
@@ -8,7 +8,7 @@ const fs = require('fs');
 
 /**
  * @typedef {object} AuditEntry
- * @property {string}      tool         - always 'hana_execute_query'
+ * @property {string}      tool         - query tool name
  * @property {string}      queryPreview - first 200 chars of SQL
  * @property {number}      durationMs
  * @property {number|null} rowCount     - null on error
